@@ -1,0 +1,277 @@
+//Librerias
+#include <Servo.h>
+#include <Wire.h>
+#include <LSM303.h>
+#include <L3G.h>
+LSM303 compass;
+L3G gyro;
+Servo Servo1,Servo2;
+
+//Variables Calibration-----------------------------------------------------
+float AEX,AEY;//-------------error correction. Can be a list
+int c = 0;//----------------- iteration count.
+int start;
+
+//Variables Acel----------------------------------------------------------
+float x, y, z;//------------raw input. can be a list
+float xg, yg, zg;//---------acceleration expressed in G's. can be a list
+float AaccX,AaccY;//--------Angle Acel. can be a list.
+float G;//------------------Gravity Vector
+
+//Variables Gyro----------------------------------------------------------
+float GEX,GEY,GEZ;//--------Gyro Error. Can be list
+float GX,GY,GZ;//-----------Gyro Raw Input. can be list
+float GVX,GVY,GVZ;//--------Gyro Sens Input.Can be list
+float GAVX,GAVY,GAVZ;//-----Gyro Actual Value. Can be list
+float AGX,AGY,AGZ;//--------Gyro Angle. Can be list
+
+//Variables Time------------------------------------------------------------------
+float ActualTime, PrevTime, ElapsedTime;//-----Variables to obtain Gyro angle. can be list
+
+//Variables Output /(PID Input)
+float Roll, Pitch, Yaw;
+
+//Variables PID X--------------------------------------------------------------------
+int TM = 1;//2;
+long Past = 0;
+long Now;
+float Ref = 0;
+float Reading;
+
+double Error;
+double PastError = 0;
+double PrevError = 0;
+double ServoPos;
+
+double Kp =1.5;//1;//0.75;
+double Ki =0;
+double Kd =1;//0.25;
+
+//Variables PID Y------------------------------------------------------------------
+double TM1 = 1;//2;
+long Past1 = 0;
+long Now1;
+float Ref1 = 0;
+float Reading1;
+
+double Error1;
+double PastError1 = 0;
+double PrevError1 = 0;
+double ServoPos1;
+
+double Kp1 =1.5 ;//0.75;
+double Ki1 =0;
+double Kd1 =0.5;
+
+//------------------------------------------------------------------------------//
+
+void setup()
+{
+  start = 0;
+  //Arduino------------------
+  Serial.begin(9600);
+  Wire.begin();
+  //Acel---------------------
+  compass.init();
+  compass.enableDefault();
+  //Gyro---------------------
+  gyro.init();
+  gyro.enableDefault();
+  //Servo--------------------
+  Servo1.attach(3);
+  Servo2.attach(4);
+  //Data Correction----------
+  calculate_error();
+}
+void loop()
+{
+  PID();
+}
+
+void CompFilt()
+{
+  AcelAngle();
+  GyroAngle();
+  Roll = (0.9 * (Roll + AGX)) + (0.1 * AaccX); 
+  Pitch = (0.9 * (Pitch + AGY)) + (0.1* AaccY); 
+  Yaw = Yaw + (GAVZ * ElapsedTime);
+}
+
+void AcelRead()
+{
+  compass.read();
+  x= compass.a.x;
+  y= compass.a.y;
+  z= compass.a.z;
+  xg = x / 18000;
+  yg = y / 18000;
+  zg = z / 18000;
+  G = sqrt(pow(xg, 2) + pow(yg, 2) + pow(zg, 2));
+}
+
+void AcelAngle()
+{
+  AcelRead();
+  AaccX = (atan(yg / sqrt(pow(xg, 2) + pow(zg, 2))) * 180 / PI) - (AEX);
+  AaccY = (atan(xg / sqrt(pow(yg, 2) + pow(zg, 2))) * 180 / PI) + (AEY);
+}
+
+void GyroRead()
+{
+  gyro.read();
+  PrevTime  = ActualTime;
+  ActualTime = millis();
+  ElapsedTime = (ActualTime - PrevTime)/1000;
+  GX = gyro.g.x;
+  GY = gyro.g.y;
+  GZ = gyro.g.z;
+}
+
+void GyroAngle()
+{
+  GyroRead();
+  GVX = GX/115;
+  GVY = GY/115;
+  GVZ = GZ/115;
+  GAVX= GVX - GEX;
+  GAVY= GVY - GEY;
+  GAVZ= GVZ - GEZ;
+  AGX = GAVX * ElapsedTime;
+  AGY = GAVY * ElapsedTime;
+  AGZ = GAVZ * ElapsedTime;
+}
+
+void calculate_error()
+{
+  //Acel Error Calculation
+  while (c < 1000)
+  {
+    AcelRead();
+    AEX = AEX + ((atan((yg) / sqrt(pow((xg), 2) + pow((zg), 2))) * 180 / PI));
+    AEY = AEY + ((atan(-1 * (xg) / sqrt(pow((yg), 2) + pow((zg), 2))) * 180 / PI));
+    c++;
+  }
+  AEX = AEX / 1000;
+  AEY = AEY / 1000;
+  //reset iterations for gyro check
+  
+  c = 0;
+  
+  //Gyro Error Calculation
+  while (c < 1000)
+  {
+    GyroRead();
+    GEX = GEX + (GX / 115);
+    GEY = GEY + (GY / 115);
+    GEZ = GEZ + (GZ / 115);
+    c++;
+  }
+  GEX = GEX/1000;
+  GEY = GEY/1000;
+  GEZ = GEZ/1000;
+  ViewData();
+}
+
+void PID()
+{
+  CompFilt();
+  Now = millis();
+  int Change = Now - Past;
+  if (Change >= TM)
+  {
+    Reading = Roll;
+    Error = Ref - Reading;                  
+    PastError = PastError + (Error * TM);  
+    double ErrorD = (Error - PrevError) / TM;
+    float P = Kp * Error;
+    float I = Ki * PastError;
+    float D = Kd * ErrorD;
+   
+    Reading1 = Pitch;
+    Error1 = Ref1 - Reading1;                  
+    PastError1 = PastError1 + (Error1 * TM1);  
+    double ErrorD1 = (Error1 - PrevError1) / TM1;
+    float P1 = Kp1 * Error1;
+    float I1 = Ki1 * PastError1;
+    float D1 = Kd1 * ErrorD1;
+
+    ServoPos = 90 - (P+I+D);
+    ServoPos1 = 90 - (P1+I1+D1);
+
+    Past = Now;
+    PrevError = Error;
+    PrevError1 = Error1;
+
+    if (ServoPos > 180)
+    {
+        ServoPos = 180;
+    }
+    if (ServoPos < 0)
+    {
+      ServoPos = 0;
+    }
+    Servo1.write(ServoPos);
+    
+    if (ServoPos1 > 180)
+    {
+        ServoPos1 = 180;
+    }
+    if (ServoPos1 < 0)
+    {
+      ServoPos1 = 0;
+    }
+    Servo2.write(ServoPos1);
+
+    
+    Serial.print("Roll: ");
+    Serial.print(Roll);
+
+    Serial.print("  ServoPos: ");
+    Serial.print(ServoPos);
+    
+    Serial.print("  |  Pitch: ");
+    Serial.print(Pitch);
+
+
+    Serial.print("  ServoPos: ");
+    Serial.println(ServoPos1);
+  }
+}
+
+void ViewData()
+{
+  if (start = 1)
+  {
+    //angles--------------------------
+    Serial.print("Angle X: ");
+  Serial.print(AaccX);
+  Serial.print("     Angle Y: ");
+  Serial.print(AaccY);
+  Serial.print("  |   Roll: ");
+  Serial.print(Roll);
+  Serial.print("   |   Pitch: ");
+  Serial.print(Pitch);
+  Serial.print("   |   Yaw: ");
+  Serial.print(Yaw);
+  //Serial.print("  |   ServoPos: ");
+  //Serial.print(ServoPos);
+  Serial.print(" | ");
+  Serial.print(AEX);
+  Serial.print(" | ");
+  Serial.println(AEY);
+  }
+  else
+  {
+    //Error Calculation---------------
+  Serial.print("AccErrorX: ");
+  Serial.print(AEX);
+  Serial.print("  AccErrorY: ");
+  Serial.print(AEY);
+  Serial.print("  |  GyroErrorX: ");
+  Serial.print(GEX);
+  Serial.print("  GyroErrorY: ");
+  Serial.print(GEY);
+  Serial.print("  GyroErrorZ: ");
+  Serial.println(GEZ);
+  }   
+}
